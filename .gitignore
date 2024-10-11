@@ -1,0 +1,14 @@
+# ignore vscode config
+.vscode/
+
+# ignore python cache
+__pycache__/
+
+# ignore latex and minted cache, aux, and log files
+_minted*/
+*.aux
+*.log
+
+# ignore compressed files
+*.zip
+*.rar
