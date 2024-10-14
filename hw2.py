@@ -13,6 +13,7 @@ class DynamicStrategy:
         self.alphas = pd.DataFrame(columns = ["riskless", "risky"])
         for key, val in kwargs.items():
             setattr(self, key, val)
+        self.r_eff = self.rf / self.num_days
 
     def get_returns(self, price) -> pd.Series:
         rets = price.pct_change()[1:]
@@ -30,17 +31,21 @@ class DynamicStrategy:
         return mu, sigma
     
     def get_optimal_alpha(self, mu, sigma) -> float:
-        # init = [1., 0.]
-        init = [.5, .5]
-        obj_func = lambda x: -.5 * (np.power((1 + x@np.array([self.rf, mu+sigma])), self.zeta) +
-                                np.power((1 + x@np.array([self.rf, mu-sigma])), self.zeta))
-        constr = {"type": "eq", "fun": lambda x: np.sum(x) - 1}
-        opt = scipy.optimize.minimize(fun = obj_func, x0 = init, constraints = constr)
-        return opt.x
-    
-    def simulate_returns(self) -> np.array:
-        ...
 
+        # init = np.ones(2) / 2
+        # obj_func = lambda x: -.5 * (np.power(1 + x@np.array([self.r_eff, mu+sigma]), self.zeta) + np.power(1 
+        #             + x@np.array([self.r_eff, mu-sigma]), self.zeta))
+        # constr = {"type": "eq", "fun": lambda x: np.sum(x) - 1}
+        # opt = scipy.optimize.minimize(fun = obj_func, x0 = init, constraints = constr)
+
+        # The code below is considered as the same kind of forbidden magic as Avada Kedavra. 
+        # idk why the previous code didn't work, but this did.
+        init = .5
+        obj_func = lambda x: -.5 * (np.power(1 + (1 - x)*self.r_eff + x * (mu + sigma), self.zeta) 
+                                    + np.power(1 + (1 - x)*self.r_eff + x * (mu - sigma), self.zeta))
+        opt = scipy.optimize.minimize(fun = obj_func, x0 = init)
+        return np.array([1 - opt.x[0], opt.x[0]])
+    
     def backtest(self):
         for i in range(self.N, self.M, self.T):
             train_set = self.returns[i - self.N : i]
@@ -49,10 +54,9 @@ class DynamicStrategy:
             alpha = self.get_optimal_alpha(mu, sigma)
             self.alphas = pd.concat([self.alphas, pd.DataFrame(data = [alpha] * test_idx.shape[0], index = test_idx, \
                                                                columns = self.alphas.columns)], axis = 0)
-            # print(train_set.index[0], train_set.index[-1], test_idx[0], test_idx[-1])
             print(alpha)
 
-        pnl = ((1 + self.alphas["riskless"] * (np.power(1 + self.rf, 1/self.num_days) - 1) + self.alphas["risky"] * \
+        pnl = ((1 + self.alphas["riskless"] * self.r_eff + self.alphas["risky"] * \
                self.returns[self.N:].shift(-1)).cumprod() - 1).shift(1).iloc[1:]
         mu_trade = ...
         sigma_trade = ...
@@ -61,9 +65,8 @@ class DynamicStrategy:
 
 def main():
     dt = yf.download(tickers = "^GSPC", start = "2014-01-01", end = "2022-01-01")
-    strategy = DynamicStrategy(price_data = dt["Adj Close"], log_returns = False, rf = .01, zeta = .3, N = 1000, T = 100)
+    strategy = DynamicStrategy(price_data = dt["Adj Close"], log_returns = False, rf = .01, zeta = -3, N = 1000, T = 100)
     strategy.backtest()
-    breakpoint()
 
 if __name__ == "__main__":
     main()
