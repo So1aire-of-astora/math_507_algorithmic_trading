@@ -64,7 +64,7 @@ class DynamicStrategy:
     def _(self, data: np.ndarray):
         '''
         get params based on pnl process, np.ndarray
-        updata: 
+        update: now using wealth process
         '''
         # data += 1
         mu_trade, sigma_trade = self.get_train_params((data[1:] - data[:-1]) / data[:-1], annualize = True)
@@ -73,8 +73,10 @@ class DynamicStrategy:
     def _(self, data: pd.Series):
         '''
         get params based on pnl process, pd.Series
+        update: now using wealth process
         '''
-        mu_trade, sigma_trade = self.get_train_params((1 + data).pct_change().iloc[1:], annualize = True)
+        # data += 1
+        mu_trade, sigma_trade = self.get_train_params((data).pct_change().iloc[1:], annualize = True)
         return pd.DataFrame.from_dict({data.index[-1]: [mu_trade, sigma_trade, (mu_trade - self.rf) / sigma_trade]}, \
                                       orient = "index", columns = ["mu", "sigma", "Sharpe"]) 
 
@@ -84,10 +86,11 @@ class DynamicStrategy:
     
     def update_wealth(self, alphas, curr_wealth, curr_pos, returns):
         '''
-        TODO:
-        1. include transaction costs. 
+        TODO: 
+        
+        Include transaction costs. 
             - by overloading self.tc?
-            - by defining tc in advance and accepting bool tc as an arg?
+            - by defining tc in advance and accepting bool tc as an arg? --adopted. now backtest() hass a new arg tc:bool .
         '''
         assert alphas.shape[1] == returns.shape[0]
         T = returns.shape[0]
@@ -232,10 +235,10 @@ class DynamicStrategyTC(DynamicStrategy):
             alpha_curr = self.bwd_traverse(test_set.shape[0], mu, sigma)
             wealth_arr, curr_pos = self.update_wealth(alpha_curr, wealth_curr, curr_pos, test_set)
             wealth = np.append(wealth, wealth_arr)
-            curr_params = self.trade_eval(wealth_arr - 1)
+            curr_params = self.trade_eval(wealth_arr)
             trade_params = pd.concat([trade_params, curr_params], axis = 0)
         
-        eval_overall = self.trade_eval(wealth - 1)
+        eval_overall = self.trade_eval(wealth)
         trade_params = pd.concat([trade_params, eval_overall.reset_index(drop = True).rename(index = {0: "overall"})], axis = 0)
 
         self.pnl = pd.Series(wealth - 1, index = self.returns.index[-wealth.shape[0]:])
