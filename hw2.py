@@ -12,7 +12,7 @@ class DynamicStrategy:
         self.returns = self.get_returns(price_data)
         self.M = self.returns.shape[0]
         self.num_days = 250
-        self.alphas = pd.DataFrame(columns = ["riskless", "risky"])
+        # self.alphas = pd.DataFrame(columns = ["riskless", "risky"])
         for key, val in kwargs.items():
             setattr(self, key, val)
         self.r_eff = self.rf / self.num_days
@@ -43,7 +43,8 @@ class DynamicStrategy:
         obj_func = lambda x: -.5 * (np.power(1 + (1 - x)*self.r_eff + x * (mu + sigma), self.zeta) 
                                     + np.power(1 + (1 - x)*self.r_eff + x * (mu - sigma), self.zeta))
         opt = scipy.optimize.minimize(fun = obj_func, x0 = init)
-        return np.array([1 - opt.x[0], opt.x[0]])
+        # return np.array([1 - opt``.x[0], opt.x[0]])
+        return opt.x[0]
     
     @singledispatchmethod
     def trade_eval(self, data):
@@ -63,8 +64,9 @@ class DynamicStrategy:
     def _(self, data: np.ndarray):
         '''
         get params based on pnl process, np.ndarray
+        updata: 
         '''
-        data += 1
+        # data += 1
         mu_trade, sigma_trade = self.get_train_params((data[1:] - data[:-1]) / data[:-1], annualize = True)
         return pd.DataFrame(data = [[mu_trade, sigma_trade, (mu_trade - self.rf) / sigma_trade]], columns = ["mu", "sigma", "Sharpe"])  
     @trade_eval.register
@@ -76,27 +78,59 @@ class DynamicStrategy:
         return pd.DataFrame.from_dict({data.index[-1]: [mu_trade, sigma_trade, (mu_trade - self.rf) / sigma_trade]}, \
                                       orient = "index", columns = ["mu", "sigma", "Sharpe"]) 
 
-    def tc(self):
-        return 0
+    def tc(self, a, alpha_target, wealth):
+        assert hasattr(self, "lambda_")
+        return self.lambda_ * wealth * np.abs(a - alpha_target)
+    
+    def update_wealth(self, alphas, curr_wealth, curr_pos, returns):
+        '''
+        TODO:
+        1. include transaction costs. 
+            - by overloading self.tc?
+            - by defining tc in advance and accepting bool tc as an arg?
+        '''
+        assert alphas.shape[1] == returns.shape[0]
+        T = returns.shape[0]
+        # a_grid, _ = self.set_grid()
+        wealth_arr = np.zeros(T)
+        for t in range(T):
+            # opt_alpha = float(scipy.interpolate.interp1d(a_grid, alphas[:, t], kind = "linear", fill_value = "extrapolate")(curr_pos))
+            a = curr_pos * (1 + returns[t]) / (1 + (1 - curr_pos) * self.r_eff + curr_pos * returns[t])
+            curr_wealth = curr_wealth * (1 + (1 - alphas) * self.r_eff + alphas * returns[t]) - self.tc() * self._tc
+            # self.lambda_ * curr_wealth * np.abs(a - opt_alpha)
+            wealth_arr[t] = curr_wealth
+            curr_pos = alphas
+        return wealth_arr, curr_pos
 
-    def backtest(self, verbose = 1):
+    def backtest(self, tc = False, verbose = 1):
+        '''
+        TODO:
+        Can I make it good enough so that I don't need DynamicStrategyTC.backtest_tc()?
+        '''
+        self._tc = tc
         trade_params = pd.DataFrame(columns = ["mu", "sigma", "Sharpe"])
+        wealth = np.array([1.])
+        curr_pos = 0
         for i in range(self.N, self.M, self.T):
             train_set = self.returns[i - self.N : i]
-            test_set = self.returns[i : i + self.T]
+            test_set = self.returns[i + 1 : i + self.T + 1]
             mu, sigma = self.get_train_params(train_set)
-            alpha_val = self.get_optimal_alpha(mu, sigma)
-            alpha_df = pd.DataFrame(data = [alpha_val] * test_set.index.shape[0], index = test_set.index, columns = self.alphas.columns)
-            curr_params = self.trade_eval((alpha_df, test_set))
+
+            wealth_curr = wealth[-1]
+            alpha_curr = self.get_optimal_alpha(mu, sigma)
+            # alpha_df = pd.DataFrame(data = [alpha_val] * test_set.index.shape[0], index = test_set.index, columns = self.alphas.columns)
+            wealth_arr, curr_pos = self.update_wealth(alpha_curr, wealth_curr, curr_pos, test_set)
+            wealth = np.append(wealth, wealth_arr)
+            curr_params = self.trade_eval(wealth_arr - 1)
             trade_params = pd.concat([trade_params, curr_params[0]], axis = 0)
-            self.alphas = pd.concat([self.alphas, alpha_df], axis = 0)
+            # self.alphas = pd.concat([self.alphas, alpha_df], axis = 0)
 
         eval_overall, pnl_overall = self.trade_eval((self.alphas, self.returns[self.N:]))
         trade_params = pd.concat([trade_params, eval_overall.reset_index(drop = True).rename(index = {0: "overall"})], axis = 0)
 
         self.pnl = pnl_overall
         if verbose:
-            print("Alphas for each trading window: {}".format(self.alphas.drop_duplicates()))
+            # print("Alphas for each trading window: {}".format(self.alphas.drop_duplicates()))
             print("Annualized mean, std dev and Sharpe Ratio: \n{}".format(trade_params))
 
     def plot_pnl(self, pnl_series = None):
@@ -117,20 +151,20 @@ class DynamicStrategyTC(DynamicStrategy):
     def tc(self, w, a, alpha):
         ...
 
-    def adjust_pnl(self, verbose = 1):
-        assert hasattr(self, "lambda_")
-        self.backtest(verbose = 0)
+    # def adjust_pnl(self, verbose = 1):
+    #     assert hasattr(self, "lambda_")
+    #     self.backtest(verbose = 0)
         
-        alpha_target = self.alphas.iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]), 1]
-        alpha_orig = self.alphas.shift(1).iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]),1]
-        a = alpha_orig * (1 + self.returns[alpha_orig.index]) / (1 + (1-alpha_orig)*self.r_eff + alpha_orig * self.returns[alpha_orig.index])
+    #     alpha_target = self.alphas.iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]), 1]
+    #     alpha_orig = self.alphas.shift(1).iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]),1]
+    #     a = alpha_orig * (1 + self.returns[alpha_orig.index]) / (1 + (1-alpha_orig)*self.r_eff + alpha_orig * self.returns[alpha_orig.index])
 
-        wealth_loss = ((self.pnl+1) * self.lambda_ * np.abs(alpha_target - a)).dropna().cumsum().reindex(index = self.pnl.index)\
-                    .ffill().fillna(0)
-        pnl_adjusted = (self.pnl+1) - wealth_loss - 1
-        if verbose:
-            print("Performance of adjusted wealth process: \n{}".format(self.trade_eval(pnl_adjusted)))
-        return pnl_adjusted
+    #     wealth_loss = ((self.pnl+1) * self.lambda_ * np.abs(alpha_target - a)).dropna().cumsum().reindex(index = self.pnl.index)\
+    #                 .ffill().fillna(0)
+    #     pnl_adjusted = (self.pnl+1) - wealth_loss - 1
+    #     if verbose:
+    #         print("Performance of adjusted wealth process: \n{}".format(self.trade_eval(pnl_adjusted)))
+    #     return pnl_adjusted
 
     def set_grid(self):
         assert hasattr(self, "grid")
@@ -193,6 +227,7 @@ class DynamicStrategyTC(DynamicStrategy):
             train_set = self.returns[i - self.N : i]
             test_set = self.returns[i + 1 : i + self.T + 1] # plus 1 to match alphas
             mu, sigma = self.get_train_params(train_set)
+
             wealth_curr = wealth[-1]
             alpha_curr = self.bwd_traverse(test_set.shape[0], mu, sigma)
             wealth_arr, curr_pos = self.update_wealth(alpha_curr, wealth_curr, curr_pos, test_set)
@@ -211,13 +246,13 @@ class DynamicStrategyTC(DynamicStrategy):
 def main():
     dt = yf.download(tickers = "^GSPC", start = "2014-01-01", end = "2022-01-01")
     hyper_params = {"rf": .01, "zeta": -3, "N": 1000, "T": 100, "lambda_": .02, "grid": (-1, 2.5, 200)}
-    strategy = DynamicStrategy(price_data = dt["Adj Close"], log_returns = False, **hyper_params)
-    strategy.backtest()
-    strategy.plot_pnl()
+    # strategy = DynamicStrategy(price_data = dt["Adj Close"], log_returns = False, **hyper_params)
+    # strategy.backtest()
+    # strategy.plot_pnl()
 
     strategy_tc = DynamicStrategyTC(price_data = dt["Adj Close"], log_returns = False, **hyper_params)
-    adj_pnl = strategy_tc.adjust_pnl()
-    strategy_tc.plot_pnl(adj_pnl)
+    # adj_pnl = strategy_tc.adjust_pnl()
+    # strategy_tc.plot_pnl(adj_pnl)
     strategy_tc.backtest_tc()
     strategy_tc.plot_pnl()
 
