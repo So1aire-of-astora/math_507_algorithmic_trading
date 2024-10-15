@@ -76,6 +76,9 @@ class DynamicStrategy:
         return pd.DataFrame.from_dict({data.index[-1]: [mu_trade, sigma_trade, (mu_trade - self.rf) / sigma_trade]}, \
                                       orient = "index", columns = ["mu", "sigma", "Sharpe"]) 
 
+    def tc(self):
+        return 0
+
     def backtest(self, verbose = 1):
         trade_params = pd.DataFrame(columns = ["mu", "sigma", "Sharpe"])
         for i in range(self.N, self.M, self.T):
@@ -111,11 +114,14 @@ class DynamicStrategyTC(DynamicStrategy):
     def __init__(self, price_data, log_returns=False, **kwargs) -> None:
         super().__init__(price_data, log_returns, **kwargs)
 
+    def tc(self, w, a, alpha):
+        ...
+
     def adjust_pnl(self, verbose = 1):
         assert hasattr(self, "lambda_")
         self.backtest(verbose = 0)
         
-        alpha_target = self.alphas.iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]),1]
+        alpha_target = self.alphas.iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]), 1]
         alpha_orig = self.alphas.shift(1).iloc[np.hstack([np.arange(self.T, self.M-self.N, self.T), -1]),1]
         a = alpha_orig * (1 + self.returns[alpha_orig.index]) / (1 + (1-alpha_orig)*self.r_eff + alpha_orig * self.returns[alpha_orig.index])
 
@@ -130,31 +136,41 @@ class DynamicStrategyTC(DynamicStrategy):
         assert hasattr(self, "grid")
         return np.linspace(*self.grid), np.linspace(*self.grid)
     
-    def curr_rwd(self, alphas: np.ndarray, a: float, mu: float, epsilon: float) -> np.ndarray:
-        return np.power((1 + alphas * (mu+epsilon) - self.lambda_ * abs(alphas-a)), self.zeta)
+    # def curr_rwd(self, alphas: np.ndarray, a: float, mu: float, epsilon: float) -> np.ndarray:
+    #     return np.power((1 + alphas * (mu+epsilon) - self.lambda_ * abs(alphas-a)), self.zeta)
+
+    def curr_rwd(self, alphas: np.ndarray, a: np.ndarray, mu: float, epsilon: float) -> np.ndarray:
+        return np.power((1 + alphas * (mu+epsilon) - self.lambda_ * abs(alphas[None,:] - a[:, None])), self.zeta)
 
     def get_next_state(self, alpha: np.ndarray, mu, epsilon) -> np.ndarray:
         return (alpha * (1+mu+epsilon)) / (1 + (1-alpha) * self.r_eff + alpha * (mu+epsilon))
 
-    def rand_max(self, arr):
-        idx = np.random.choice(np.where(arr == arr.max())[0])
-        return arr[idx], idx
+    def rand_argmax(self, arr):
+        return np.random.choice(np.where(arr == arr.max())[0])
 
     def bwd_traverse(self, window, mu, sigma):
         a_grid, alpha_grid = self.set_grid()
         V_grid = np.zeros([self.grid[-1], window + 1])
         strategy_grid = np.zeros([self.grid[-1], window])
         V_grid[:, -1] = 1 / self.zeta
+
         for t in reversed(range(window)):
             interp_func = scipy.interpolate.interp1d(a_grid, V_grid[:, t + 1], kind = "linear", fill_value = "extrapolate")
-            for i, a in enumerate(a_grid):
-                rwd = np.vstack([self.curr_rwd(alpha_grid, a, mu, sigma), self.curr_rwd(alpha_grid, a, mu, -sigma)])
-                a_next = np.vstack([self.get_next_state(alpha_grid, mu, sigma), self.get_next_state(alpha_grid, mu, -sigma)])
-                V_exp = (rwd * interp_func(a_next)).mean(axis = 0)
-                V_grid[i, t], strategy_grid[i, t] = self.rand_max(V_exp)
+            # for i, a in enumerate(a_grid):
+            #     rwd = np.vstack([self.curr_rwd(alpha_grid, a, mu, sigma), self.curr_rwd(alpha_grid, a, mu, -sigma)])
+            #     a_next = np.vstack([self.get_next_state(alpha_grid, mu, sigma), self.get_next_state(alpha_grid, mu, -sigma)])
+            #     V_exp = (rwd * interp_func(a_next)).mean(axis = 0)
+            #     V_grid[i, t], strategy_grid[i, t] = self.rand_max(V_exp)
+            '''
+            dimension: [a, alpha, prob]
+            '''
+            rwd = np.stack([self.curr_rwd(alpha_grid, a_grid, mu, sigma), self.curr_rwd(alpha_grid, a_grid, mu, -sigma)], axis = 2)
+            a_next = np.vstack([self.get_next_state(alpha_grid, mu, sigma), self.get_next_state(alpha_grid, mu, -sigma)])
+            V_exp = (rwd * interp_func(a_next).T[None,:,:]).mean(axis = 2)
+            V_grid[:, t] = V_exp.max(axis = 1)
+            strategy_grid[:, t] = np.apply_along_axis(func1d = self.rand_argmax, arr = V_exp, axis = 1)
             
-        optimal_alphas = alpha_grid[strategy_grid.astype(int)]
-        return optimal_alphas
+        return alpha_grid[strategy_grid.astype(int)]
 
     def update_wealth(self, alphas, curr_wealth, curr_pos, returns):
         assert alphas.shape[1] == returns.shape[0]
