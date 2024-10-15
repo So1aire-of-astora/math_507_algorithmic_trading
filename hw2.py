@@ -123,7 +123,7 @@ class DynamicStrategyTC(DynamicStrategy):
                     .ffill().fillna(0)
         pnl_adjusted = (self.pnl+1) - wealth_loss - 1
         if verbose:
-            print("Performance of adjusted wealth process: {}".format(self.trade_eval(pnl_adjusted)))
+            print("Performance of adjusted wealth process: \n{}".format(self.trade_eval(pnl_adjusted)))
         return pnl_adjusted
 
     def set_grid(self):
