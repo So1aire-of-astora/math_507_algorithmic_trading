@@ -92,11 +92,9 @@ class Strategy:
         if verbose:
             print("Annualized mean, std dev and Sharpe Ratio: \n{}".format(trade_params))
 
-    def plot_pnl(self, pnl_series = None):
+    def plot_pnl(self):
         assert hasattr(self, "pnl")
-        if pnl_series is None:
-            pnl_series = self.pnl
-        plt.plot(pnl_series)
+        plt.plot(self.pnl)
         plt.title("PnL Process of Stratgy")
         plt.xticks(rotation = 45)
         plt.xlabel("time")
