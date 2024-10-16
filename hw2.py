@@ -42,17 +42,6 @@ class Strategy:
         get params based on the wealth process
         '''
         raise NotImplementedError("Input type unsupported.")
-    # @trade_eval.register
-    # def _(self, data: tuple):
-    #     '''
-    #     get params based on alpha and return
-    #     '''
-    #     alpha, returns = data[0], data[1]
-    #     pnl = ((1 + alpha["riskless"] * self.r_eff + alpha["risky"] * \
-    #            returns.shift(-1)).cumprod() - 1).shift(1).iloc[1:]
-    #     mu_trade, sigma_trade = self.get_train_params((1 + pnl).pct_change().iloc[1:], annualize = True)
-    #     return pd.DataFrame.from_dict({pnl.index[-1]: [mu_trade, sigma_trade, (mu_trade - self.rf) / sigma_trade]}, \
-    #                                   orient = "index", columns = ["mu", "sigma", "Sharpe"]), pnl
     @trade_eval.register
     def _(self, data: np.ndarray):
         mu_trade, sigma_trade = self.get_train_params((data[1:] - data[:-1]) / data[:-1], annualize = True)
@@ -101,19 +90,11 @@ class Strategy:
         plt.ylabel("wealth")
         plt.show()
         
-
 class DynamicStrategy(Strategy):
     def __init__(self, price_data, log_returns = False, **kwargs) -> None:
         super().__init__(price_data, log_returns, **kwargs)
     
     def get_optimal_alpha(self, mu, sigma, window = None):
-        # init = np.ones(2) / 2
-        # obj_func = lambda x: -.5 * (np.power(1 + x@np.array([self.r_eff, mu+sigma]), self.zeta) + np.power(1 
-        #             + x@np.array([self.r_eff, mu-sigma]), self.zeta))
-        # constr = {"type": "eq", "fun": lambda x: np.sum(x) - 1}
-        # opt = scipy.optimize.minimize(fun = obj_func, x0 = init, constraints = constr)
-
-        # idk why the previous code didn't work, but the following did. FML.
         init = .5
         obj_func = lambda x: -.5 * (np.power(1 + (1 - x)*self.r_eff + x * (mu + sigma), self.zeta) 
                                     + np.power(1 + (1 - x)*self.r_eff + x * (mu - sigma), self.zeta))
@@ -133,30 +114,13 @@ class DynamicStrategy(Strategy):
             curr_pos = alpha
         return wealth_arr, curr_pos
 
-class DynamicStrategyTC(Strategy):
+class DynamicStrategyTC(DynamicStrategy):
     def __init__(self, price_data, log_returns=False, **kwargs):
         super().__init__(price_data, log_returns, **kwargs)
     
-    def get_optimal_alpha(self, mu, sigma, window = None):
-        init = .5
-        obj_func = lambda x: -.5 * (np.power(1 + (1 - x)*self.r_eff + x * (mu + sigma), self.zeta) 
-                                    + np.power(1 + (1 - x)*self.r_eff + x * (mu - sigma), self.zeta))
-        opt = scipy.optimize.minimize(fun = obj_func, x0 = init)
-        return opt.x[0]
-
     def tc(self, a, alpha_target, wealth):
         assert hasattr(self, "lambda_")
         return self.lambda_ * wealth * np.abs(a - alpha_target)
-    
-    def update_wealth(self, alpha, curr_wealth, curr_pos, returns): 
-        T = returns.shape[0]
-        wealth_arr = np.zeros(T)
-        for t in range(T):
-            a = curr_pos * (1 + returns[t]) / (1 + (1 - curr_pos) * self.r_eff + curr_pos * returns[t])
-            curr_wealth = curr_wealth * (1 + (1 - alpha) * self.r_eff + alpha * returns[t]) - self.tc(a, alpha, curr_wealth)
-            wealth_arr[t] = curr_wealth
-            curr_pos = alpha
-        return wealth_arr, curr_pos    
 
 class DynamicStrategyGrid(Strategy):
     def __init__(self, price_data, log_returns=False, **kwargs) -> None:
@@ -166,9 +130,6 @@ class DynamicStrategyGrid(Strategy):
         assert hasattr(self, "grid")
         return np.linspace(*self.grid), np.linspace(*self.grid)
     
-    # def curr_rwd(self, alphas: np.ndarray, a: float, mu: float, epsilon: float) -> np.ndarray:
-    #     return np.power((1 + alphas * (mu+epsilon) - self.lambda_ * abs(alphas-a)), self.zeta)
-
     def curr_rwd(self, alphas: np.ndarray, a: np.ndarray, mu: float, epsilon: float) -> np.ndarray:
         return np.power((1 + alphas * (mu+epsilon) - self.lambda_ * abs(alphas[None,:] - a[:, None])), self.zeta)
 
@@ -186,11 +147,6 @@ class DynamicStrategyGrid(Strategy):
 
         for t in reversed(range(window)):
             interp_func = scipy.interpolate.interp1d(a_grid, V_grid[:, t + 1], kind = "linear", fill_value = "extrapolate")
-            # for i, a in enumerate(a_grid):
-            #     rwd = np.vstack([self.curr_rwd(alpha_grid, a, mu, sigma), self.curr_rwd(alpha_grid, a, mu, -sigma)])
-            #     a_next = np.vstack([self.get_next_state(alpha_grid, mu, sigma), self.get_next_state(alpha_grid, mu, -sigma)])
-            #     V_exp = (rwd * interp_func(a_next)).mean(axis = 0)
-            #     V_grid[i, t], strategy_grid[i, t] = self.rand_max(V_exp)
             '''
             dimension: [a, alpha, prob]
             '''
