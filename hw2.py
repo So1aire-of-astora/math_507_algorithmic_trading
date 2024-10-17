@@ -84,7 +84,7 @@ class Strategy:
     def plot_pnl(self):
         assert hasattr(self, "pnl")
         plt.plot(self.pnl)
-        plt.title("PnL Process of Stratgy")
+        plt.title("PnL Process of Strategy")
         plt.xticks(rotation = 45)
         plt.xlabel("time")
         plt.ylabel("wealth")
