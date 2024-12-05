@@ -12,10 +12,11 @@ def load_data(path, start, end):
     return yf.download(tickers, start, end)["Adj Close"].reset_index(drop = True)
 
 class PairsTrading:
-    def __init__(self, data, N, T) -> None:
+    def __init__(self, data, N, T, max_invest) -> None:
         self.data = data
         self.N = N
         self.T = T
+        self.max_invest = max_invest
         self.get_pairs()
 
     def get_pairs(self):
@@ -39,18 +40,18 @@ class PairsTrading:
         self.tracker = pd.DataFrame(index=multi_index, columns=columns)
         self.pairs = ticker_pairs
 
-    def coint_test(self, stock_0: str, stock_1: str, curr_day: int):
+    def coint_test(self, t: int, pair: tuple):
         '''
         Test for cointegration based on the Soren Johansen Method, and the ADF test.
         return: 
             the cointegration coefficient, if there's any, else -1
         '''
-        price_0 = self.data.loc[curr_day-self.N:curr_day-1, stock_0].values
-        price_1 = self.data.loc[curr_day-self.N:curr_day-1, stock_1].values
-        price_diff = np.diff(np.vstack([price_0, price_1]), axis = 0).T 
+        price_0 = self.data.loc[t-self.N : t-1, pair[0]].values
+        price_1 = self.data.loc[t-self.N : t-1, pair[1]].values
+        price_diff = np.diff(np.vstack([price_0, price_1]).T, axis = 0)
         reg = LinearRegression().fit(price_diff[:-1, :], price_diff[1:, :])
         lambda_, v = np.linalg.eig((reg.coef_ + np.identity(2)).T)
-        lambda_idx = np.where([lambda_.imag == 0])
+        lambda_idx = np.where(lambda_.imag == 0)[0]
         if lambda_idx.shape[0] == 0:
             return -1
         c = (v[1,:] / v[0,:])[lambda_idx]
@@ -68,16 +69,16 @@ class PairsTrading:
     
     def get_params(self):
         '''
-        get the mu and sigma for a pair on a trading day
+        get the mu and sigma for all stocks, all trading days, so that we don't need to 
+        calculate those parameters in the backtest loop.
         '''
 
     def isopen(self, t, pair) -> bool:
         return self.tracker.loc[(t-1, pair), "status"] != -1
     
-    def open_signal(self, Z, mu, sigma) -> int:
+    def open_signal(self, t, pair) -> int:
         '''
-        given the pair price Z, mean mu, and std.dev. sigma, determine if we should 
-        open a position for that pair.
+        given a *cointegrated* pair, determine if we should open a position for the given pair.
         Return: the open signal
             -1 - short position
             0 - do not open
@@ -94,19 +95,19 @@ class PairsTrading:
             3 - max holding period is reached
         '''
 
-    def get_position(self, t, pair, C, signal):
+    def get_position(self, t, pair, signal):
         '''
         compute the position of a pair upon entering, given C and the open signal.
         '''
 
-    def update_value(self, t, pair, position):
+    def update_value(self, t, pair):
         '''
-        update the value of the given pair. 
+        update the value of a opened position. 
         '''
 
-    def open(self):
+    def open(self, t, pair):
         '''
-        compute position, set status to 0
+        compute position, set status to 0, get position
         '''
 
     def hold(self, t, pair):
@@ -126,7 +127,6 @@ class PairsTrading:
         '''
         for t in range(self.N, self.data.index.stop):
             for pair in self.pairs:
-                mu, sigma = self.get_params() # compute mu and sigma no matter what happens
 
                 if self.isopen(t, pair):
                     # for opened positions
@@ -142,12 +142,24 @@ class PairsTrading:
                         self.open()
                     else: 
                         ...
-                        # update value using the data from the previous day.
+                        # update value using the data from the previous day
+    
+    def I_give_up(self):
+        '''
+        Ok I don't have time to finish the whole strategy by Friday, but at least I have finished the 
+        cointegration test part. 
+        '''
+        for t in range(self.N, num_days := self.data.shape[0]):
+            for pair in self.pairs:
+                c = self.coint_test(t, pair)
+                if c != -1:
+                    print("Day {} / {}\tPair: {}\tcoef: {}".format(t, num_days, pair, c))
 
 
 def main():
     price_data = load_data("./TechTickers.csv", start = "2021-01-01", end = "2022-01-01")
-    breakpoint()
+    pairs_trading = PairsTrading(price_data, N = 60, T = 20, max_invest = 1000000)
+    pairs_trading.I_give_up()
 
 if __name__ == "__main__":
     main()
